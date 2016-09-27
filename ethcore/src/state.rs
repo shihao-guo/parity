@@ -216,6 +216,7 @@ impl State {
 	/// Create a new contract at address `contract`. If there is already an account at the address
 	/// it will have its code reset, ready for `init_code()`.
 	pub fn new_contract(&mut self, contract: &Address, balance: U256) {
+		self.db.note_account_bloom(contract);
 		self.insert_cache(contract, AccountEntry::Cached(Account::new_contract(balance, self.account_start_nonce)));
 	}
 
@@ -226,17 +227,20 @@ impl State {
 
 	/// Determine whether an account exists.
 	pub fn exists(&self, a: &Address) -> bool {
+		if !self.db.check_account_bloom(a) { return false; }
 		self.ensure_cached(a, RequireCache::None, |a| a.is_some())
 	}
 
 	/// Get the balance of account `a`.
 	pub fn balance(&self, a: &Address) -> U256 {
+		if !self.db.check_account_bloom(a) { return U256::zero(); }
 		self.ensure_cached(a, RequireCache::None,
 			|a| a.as_ref().map_or(U256::zero(), |account| *account.balance()))
 	}
 
 	/// Get the nonce of account `a`.
 	pub fn nonce(&self, a: &Address) -> U256 {
+		if !self.db.check_account_bloom(a) { return self.account_start_nonce; }
 		self.ensure_cached(a, RequireCache::None,
 			|a| a.as_ref().map_or(self.account_start_nonce, |account| *account.nonce()))
 	}
@@ -297,12 +301,14 @@ impl State {
 
 	/// Get accounts' code.
 	pub fn code(&self, a: &Address) -> Option<Bytes> {
+		if !self.db.check_account_bloom(a) { return None; }
 		self.ensure_cached(a, RequireCache::Code,
 			|a| a.as_ref().map_or(None, |a| a.code().map(|x|x.to_vec())))
 	}
 
 	/// Get accounts' code size.
 	pub fn code_size(&self, a: &Address) -> Option<u64> {
+		if !self.db.check_account_bloom(a) { return None; }
 		self.ensure_cached(a, RequireCache::CodeSize,
 			|a| a.as_ref().and_then(|a| a.code_size()))
 	}
@@ -310,12 +316,14 @@ impl State {
 	/// Add `incr` to the balance of account `a`.
 	pub fn add_balance(&mut self, a: &Address, incr: &U256) {
 		trace!(target: "state", "add_balance({}, {}): {}", a, incr, self.balance(a));
+		self.db.note_account_bloom(a);
 		self.require(a, false).add_balance(incr);
 	}
 
 	/// Subtract `decr` from the balance of account `a`.
 	pub fn sub_balance(&mut self, a: &Address, decr: &U256) {
 		trace!(target: "state", "sub_balance({}, {}): {}", a, decr, self.balance(a));
+		self.db.note_account_bloom(a);
 		self.require(a, false).sub_balance(decr);
 	}
 
@@ -327,22 +335,26 @@ impl State {
 
 	/// Increment the nonce of account `a` by 1.
 	pub fn inc_nonce(&mut self, a: &Address) {
+		self.db.note_account_bloom(a);
 		self.require(a, false).inc_nonce()
 	}
 
 	/// Mutate storage of account `a` so that it is `value` for `key`.
 	pub fn set_storage(&mut self, a: &Address, key: H256, value: H256) {
+		self.db.note_account_bloom(a);
 		self.require(a, false).set_storage(key, value)
 	}
 
 	/// Initialise the code of account `a` so that it is `code`.
 	/// NOTE: Account should have been created with `new_contract`.
 	pub fn init_code(&mut self, a: &Address, code: Bytes) {
+		self.db.note_account_bloom(a);
 		self.require_or_from(a, true, || Account::new_contract(0.into(), self.account_start_nonce), |_|{}).init_code(code);
 	}
 
 	/// Reset the code of account `a` so that it is `code`.
 	pub fn reset_code(&mut self, a: &Address, code: Bytes) {
+		self.db.note_account_bloom(a);
 		self.require_or_from(a, true, || Account::new_contract(0.into(), self.account_start_nonce), |_|{}).reset_code(code);
 	}
 
@@ -409,7 +421,6 @@ impl State {
 		for (address, a) in addresses.drain() {
 			match a {
 				AccountEntry::Cached(account) => {
-					self.db.note_account_bloom(&address);
 					if !account.is_dirty() {
 						self.db.cache_account(address, Some(account));
 					}
@@ -419,7 +430,7 @@ impl State {
 				}
 				_ => {},
 			}
-		}
+		}	
 	}
 
 	/// Commits our cached account changes into the trie.
@@ -439,6 +450,7 @@ impl State {
 	pub fn populate_from(&mut self, accounts: PodState) {
 		assert!(self.snapshots.borrow().is_empty());
 		for (add, acc) in accounts.drain().into_iter() {
+			self.db.note_account_bloom(&add);
 			self.cache.borrow_mut().insert(add, AccountEntry::Cached(Account::from_pod(acc)));
 		}
 	}
